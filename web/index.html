@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Otimizador de Arquivos</title>
+    <link rel="stylesheet" href="style.css">
+    <script type="module" src="index.js"></script>
+</head>
+<body>
+<main>
+    <header>
+        <h1>Otimizador de Arquivos</h1>
+        <p class="sub">Imagens e PDFs comprimidos no seu navegador com Rust + WebAssembly. Nada é enviado para servidores.</p>
+    </header>
+
+    <section class="panel">
+        <label id="drop" class="drop" for="fileInput">
+            <input type="file" id="fileInput" accept="image/*,.pdf,application/pdf" multiple>
+            <strong>Arraste arquivos aqui</strong>
+            <span>ou clique para escolher — JPEG, PNG, GIF, BMP, WebP, TIFF e PDF</span>
+        </label>
+
+        <div class="settings">
+            <div class="field">
+                <label for="quality">Qualidade JPEG <output id="qualityOut">70</output></label>
+                <input type="range" id="quality" min="10" max="100" value="70">
+            </div>
+            <div class="field">
+                <label for="scale">Resolução <output id="scaleOut">100%</output></label>
+                <input type="range" id="scale" min="10" max="100" step="5" value="100">
+            </div>
+            <div class="field">
+                <label for="format">Formato das imagens</label>
+                <select id="format">
+                    <option value="auto">Automático (PNG se tiver transparência)</option>
+                    <option value="jpeg">JPEG</option>
+                    <option value="png">PNG</option>
+                </select>
+            </div>
+            <div class="field check">
+                <label><input type="checkbox" id="dryRun"> Modo dry-run</label>
+                <small>Só compara original e otimizado, sem salvar nada.</small>
+            </div>
+        </div>
+        <div class="actions">
+            <button id="rerun" disabled>Reprocessar com estas configurações</button>
+            <button id="clear" class="ghost" disabled>Limpar</button>
+        </div>
+    </section>
+
+    <section id="summary" class="summary" hidden></section>
+    <section id="results" class="results"></section>
+</main>
+
+<dialog id="preview">
+    <div class="preview-head">
+        <h2 id="previewTitle"></h2>
+        <button id="closePreview" class="ghost" aria-label="Fechar">✕</button>
+    </div>
+    <div class="compare">
+        <figure><figcaption id="capBefore">Original</figcaption><div id="before" class="frame"></div></figure>
+        <figure><figcaption id="capAfter">Otimizado</figcaption><div id="after" class="frame"></div></figure>
+    </div>
+</dialog>
+</body>
+</html>
