@@ -15,7 +15,7 @@
     </header>
 
     <section class="panel">
-        <label id="drop" class="drop" for="fileInput">
+        <label id="drop" class="drop" for="fileInput" tabindex="0" role="button" aria-label="Escolher arquivos para otimizar">
             <input type="file" id="fileInput" accept="image/*,.pdf,application/pdf" multiple>
             <strong>Arraste arquivos aqui</strong>
             <span>ou clique para escolher — JPEG, PNG, GIF, BMP, WebP, TIFF e PDF</span>
@@ -52,8 +52,8 @@
             <label><input type="checkbox" id="maxCompression"> Compressão máxima <small>(~10% menor, bem mais lenta)</small></label>
         </fieldset>
         <div class="actions">
-            <button id="rerun" disabled>Reprocessar com estas configurações</button>
-            <button id="clear" class="ghost" disabled>Limpar</button>
+            <button type="button" id="rerun" disabled>Reprocessar com estas configurações</button>
+            <button type="button" id="clear" class="ghost" disabled>Limpar</button>
         </div>
     </section>
 

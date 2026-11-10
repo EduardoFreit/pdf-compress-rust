@@ -29,6 +29,9 @@
 
 * { box-sizing: border-box; }
 
+/* Sem isto, regras como `.summary { display: flex }` anulam o atributo hidden. */
+[hidden] { display: none !important; }
+
 body {
     margin: 0;
     background: var(--bg);
@@ -56,6 +59,9 @@ h1 { margin: 0; font-size: 1.7rem; }
 }
 .drop span { color: var(--muted); font-size: .9rem; }
 .drop.over, .drop:hover { border-color: var(--accent); }
+.drop.over { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.drop:focus-visible, button:focus-visible, .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.elapsed { font-variant-numeric: tabular-nums; }
 .drop input { display: none; }
 
 .settings {

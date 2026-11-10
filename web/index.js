@@ -1,7 +1,7 @@
-// Interface: envia os arquivos para o Web Worker (que roda o WASM) e mostra os resultados.
+// Interface: mantém uma fila de arquivos, envia um por vez ao Web Worker
+// (que roda o WASM) e mostra os resultados.
 
 const $ = (id) => document.getElementById(id);
-const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
 
 const els = {
     drop: $('drop'), input: $('fileInput'),
@@ -17,10 +17,23 @@ const els = {
     capBefore: $('capBefore'), capAfter: $('capAfter'),
 };
 
+/**
+ * @typedef {{ id: number, file: File, kind: 'pdf'|'image'|null, originalUrl: string,
+ *   status: 'queued'|'working'|'done'|'error'|'cancelled', error: string|null,
+ *   result: object|null, resultUrl: string|null, card: HTMLElement|null, startedAt: number }} Entry
+ * @typedef {{ id: number, entry: Entry, settings: object }} Job
+ */
+
 /** @type {Map<number, Entry>} */
 const entries = new Map();
-const pending = new Map(); // id do job -> resolve
-let nextId = 1;
+/** @type {Job[]} */
+let queue = [];
+/** @type {Job|null} */
+let current = null;
+let worker = null;
+let nextEntryId = 1;
+let nextJobId = 1;
+let previewing = null; // entrada exibida no diálogo de comparação
 
 // ---------- utilidades ----------
 
@@ -28,6 +41,10 @@ function formatBytes(n) {
     if (n < 1024) return `${n} B`;
     if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`;
     return `${(n / 1024 ** 2).toFixed(2)} MB`;
+}
+
+function formatDuration(ms) {
+    return ms < 1000 ? `${ms.toFixed(0)} ms` : `${(ms / 1000).toFixed(1)} s`;
 }
 
 function reduction(orig, comp) {
@@ -61,84 +78,169 @@ function settings() {
     };
 }
 
-// ---------- comunicação com o worker ----------
+// ---------- worker e fila ----------
 
-worker.onmessage = ({ data }) => {
-    const resolve = pending.get(data.id);
-    pending.delete(data.id);
-    resolve?.(data);
-};
-
-worker.onerror = (e) => {
-    console.error(e);
-    for (const [id, resolve] of pending) resolve({ id, ok: false, error: 'Falha ao carregar o módulo WebAssembly.' });
-    pending.clear();
-};
-
-async function runJob(entry) {
-    const id = nextId++;
-    const buffer = await entry.file.arrayBuffer();
-    const job = { id, kind: entry.kind, buffer, ...settings() };
-    return new Promise((resolve) => {
-        pending.set(id, resolve);
-        worker.postMessage(job, [buffer]);
-    });
+function startWorker() {
+    worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+    worker.onmessage = onWorkerMessage;
+    worker.onerror = onWorkerError;
 }
 
-// ---------- fluxo principal ----------
+/** Encerra o worker (interrompendo o que estiver rodando) e cria outro. */
+function restartWorker() {
+    worker?.terminate();
+    startWorker();
+}
 
-async function process(entry) {
+function onWorkerMessage({ data }) {
+    // Mensagens de um job já cancelado são ignoradas.
+    if (!current || data.id !== current.id) return;
+    const job = current;
+    current = null;
+    if (data.fatal) restartWorker();
+    finish(job, data);
+    pump();
+}
+
+function onWorkerError(e) {
+    // Erro fora do try/catch do worker (ex.: falha ao carregar o módulo).
+    e.preventDefault?.();
+    console.error(e);
+    const job = current;
+    current = null;
+    restartWorker();
+    if (job) finish(job, { ok: false, error: 'O processamento falhou: não foi possível executar o módulo WebAssembly.' });
+    pump();
+}
+
+/** Inicia o próximo job da fila, se o worker estiver livre. */
+async function pump() {
+    if (current || queue.length === 0) return;
+    const job = queue.shift();
+    current = job;
+    const { entry } = job;
     entry.status = 'working';
-    entry.error = null;
+    entry.startedAt = performance.now();
     render(entry);
-    const msg = await runJob(entry);
+
+    let buffer;
+    try {
+        buffer = await entry.file.arrayBuffer();
+    } catch {
+        if (current !== job) return; // cancelado enquanto lia
+        current = null;
+        finish(job, { ok: false, error: 'Não foi possível ler o arquivo (ele foi movido ou apagado?).' });
+        pump();
+        return;
+    }
+    if (current !== job) return; // cancelado enquanto lia
+    worker.postMessage({ id: job.id, kind: entry.kind, buffer, ...job.settings }, [buffer]);
+}
+
+/** Coloca a entrada na fila com as configurações atuais (cancelando execuções anteriores dela). */
+function enqueue(entry) {
+    cancel(entry, false);
+    entry.status = 'queued';
+    entry.error = null;
+    queue.push({ id: nextJobId++, entry, settings: settings() });
+    render(entry);
+}
+
+/**
+ * Tira a entrada da fila e, se ela estiver em execução, interrompe o worker.
+ * Retorna true se havia algo a cancelar.
+ */
+function cancel(entry, startNext = true) {
+    const before = queue.length;
+    queue = queue.filter((job) => job.entry !== entry);
+    let cancelled = queue.length !== before;
+    if (current?.entry === entry) {
+        current = null;
+        restartWorker();
+        cancelled = true;
+    }
+    if (startNext) pump();
+    return cancelled;
+}
+
+function finish(job, msg) {
+    const { entry } = job;
     if (!entries.has(entry.id)) return; // removido enquanto processava
 
     if (entry.resultUrl) URL.revokeObjectURL(entry.resultUrl);
+    entry.resultUrl = null;
+    entry.result = null;
     if (msg.ok) {
         entry.result = msg.result;
         entry.resultUrl = URL.createObjectURL(new Blob([msg.result.data], { type: msg.result.mime }));
         entry.status = 'done';
     } else {
-        entry.result = null;
-        entry.resultUrl = null;
         entry.error = msg.error;
         entry.status = 'error';
     }
+    if (previewing === entry) els.dialog.close();
     render(entry);
     renderSummary();
+    updateButtons();
 }
 
+// ---------- ações ----------
+
 function addFiles(files) {
-    const added = [];
     for (const file of files) {
         const kind = detectKind(file);
         const entry = {
-            id: nextId++, file, kind,
+            id: nextEntryId++, file, kind,
             originalUrl: URL.createObjectURL(file),
-            status: kind ? 'queued' : 'error',
+            status: 'error',
             error: kind ? null : 'Tipo de arquivo não suportado.',
-            result: null, resultUrl: null, card: null,
+            result: null, resultUrl: null, card: null, startedAt: 0,
         };
         entries.set(entry.id, entry);
-        render(entry);
-        if (kind) added.push(entry);
+        if (kind) enqueue(entry); else render(entry);
     }
     updateButtons();
-    // O worker processa um arquivo por vez; a interface continua responsiva.
-    Promise.all(added.map(process));
+    pump();
 }
 
 function rerunAll() {
-    Promise.all([...entries.values()].filter((e) => e.kind).map(process));
+    for (const entry of entries.values()) {
+        if (entry.kind) enqueue(entry);
+    }
+    renderSummary();
+    updateButtons();
+    pump();
+}
+
+function cancelEntry(entry) {
+    cancel(entry);
+    entry.status = 'cancelled';
+    render(entry);
+    updateButtons();
+}
+
+function disposeEntry(entry) {
+    if (previewing === entry) els.dialog.close();
+    URL.revokeObjectURL(entry.originalUrl);
+    if (entry.resultUrl) URL.revokeObjectURL(entry.resultUrl);
+    entry.card?.remove();
+    entries.delete(entry.id);
+}
+
+function removeEntry(entry) {
+    cancel(entry);
+    disposeEntry(entry);
+    renderSummary();
+    updateButtons();
 }
 
 function clearAll() {
-    for (const e of entries.values()) {
-        URL.revokeObjectURL(e.originalUrl);
-        if (e.resultUrl) URL.revokeObjectURL(e.resultUrl);
+    queue = [];
+    if (current) {
+        current = null;
+        restartWorker();
     }
-    entries.clear();
+    for (const entry of [...entries.values()]) disposeEntry(entry);
     els.results.replaceChildren();
     renderSummary();
     updateButtons();
@@ -167,8 +269,15 @@ function render(entry) {
 
     const info = el('div', { class: 'info' }, el('div', { class: 'name', title: file.name }, file.name));
 
-    if (status === 'queued' || status === 'working') {
-        info.append(el('div', { class: 'meta' }, el('span', { class: 'spinner' }), ` ${status === 'queued' ? 'Na fila' : 'Otimizando'}… (${formatBytes(file.size)})`));
+    if (status === 'queued') {
+        info.append(el('div', { class: 'meta' }, `Na fila (${formatBytes(file.size)})`));
+    } else if (status === 'working') {
+        info.append(el('div', { class: 'meta' },
+            el('span', { class: 'spinner' }),
+            ` Otimizando… (${formatBytes(file.size)}) `,
+            el('span', { class: 'elapsed', 'data-start': String(entry.startedAt) }, formatDuration(performance.now() - entry.startedAt))));
+    } else if (status === 'cancelled') {
+        info.append(el('div', { class: 'meta' }, 'Cancelado.'));
     } else if (status === 'error') {
         info.append(el('div', { class: 'meta error' }, entry.error));
     } else {
@@ -185,7 +294,7 @@ function render(entry) {
                 details.push(`${result.objectsBefore.toLocaleString('pt-BR')} → ${result.objectsAfter.toLocaleString('pt-BR')} objetos`);
             }
         }
-        details.push(`${result.ms.toFixed(0)} ms`);
+        details.push(formatDuration(result.ms));
         if (result.keptOriginal) details.push('já estava otimizado; original mantido');
 
         info.append(
@@ -201,30 +310,31 @@ function render(entry) {
 
     const actions = el('div', { class: 'actions' });
     if (status === 'done') {
-        actions.append(el('button', { class: 'ghost', onclick: () => openPreview(entry) }, 'Comparar'));
+        actions.append(el('button', { type: 'button', class: 'ghost', onclick: () => openPreview(entry) }, 'Comparar'));
         if (!dry) {
             actions.append(el('a', { class: 'btn', href: entry.resultUrl, download: outputName(file.name, result.mime) }, 'Baixar'));
         }
     }
-    actions.append(el('button', { class: 'ghost', onclick: () => removeEntry(entry) }, 'Remover'));
+    if (status === 'queued' || status === 'working') {
+        actions.append(el('button', { type: 'button', class: 'ghost', onclick: () => cancelEntry(entry) }, 'Cancelar'));
+    }
+    if (entry.kind && (status === 'cancelled' || status === 'error')) {
+        actions.append(el('button', { type: 'button', class: 'ghost', onclick: () => { enqueue(entry); updateButtons(); pump(); } }, 'Tentar de novo'));
+    }
+    actions.append(el('button', { type: 'button', class: 'ghost', onclick: () => removeEntry(entry) }, 'Remover'));
 
     const card = el('article', { class: 'card' }, thumb, info, actions);
-    if (entry.card) entry.card.replaceWith(card); else els.results.append(card);
+    if (entry.card?.isConnected) entry.card.replaceWith(card); else els.results.append(card);
     entry.card = card;
-}
-
-function removeEntry(entry) {
-    URL.revokeObjectURL(entry.originalUrl);
-    if (entry.resultUrl) URL.revokeObjectURL(entry.resultUrl);
-    entry.card?.remove();
-    entries.delete(entry.id);
-    renderSummary();
-    updateButtons();
 }
 
 function renderSummary() {
     const done = [...entries.values()].filter((e) => e.status === 'done');
-    if (!done.length) { els.summary.hidden = true; return; }
+    if (!done.length) {
+        els.summary.hidden = true;
+        els.summary.replaceChildren();
+        return;
+    }
     const orig = done.reduce((s, e) => s + e.result.originalSize, 0);
     const comp = done.reduce((s, e) => s + e.result.compressedSize, 0);
     const stat = (value, label) => el('div', {}, el('b', {}, value), el('span', {}, label));
@@ -239,13 +349,13 @@ function renderSummary() {
 }
 
 function updateButtons() {
-    const has = entries.size > 0;
-    els.rerun.disabled = !has;
-    els.clear.disabled = !has;
+    els.rerun.disabled = ![...entries.values()].some((e) => e.kind);
+    els.clear.disabled = entries.size === 0;
 }
 
 function openPreview(entry) {
     const { result } = entry;
+    previewing = entry;
     els.previewTitle.textContent = entry.file.name;
     els.capBefore.textContent = `Original — ${formatBytes(result.originalSize)}`;
     els.capAfter.textContent = `Otimizado — ${formatBytes(result.compressedSize)}`;
@@ -257,6 +367,13 @@ function openPreview(entry) {
     els.dialog.showModal();
 }
 
+// Atualiza o cronômetro do arquivo em processamento.
+setInterval(() => {
+    for (const span of document.querySelectorAll('.elapsed[data-start]')) {
+        span.textContent = formatDuration(performance.now() - Number(span.dataset.start));
+    }
+}, 500);
+
 // ---------- eventos ----------
 
 els.input.addEventListener('change', () => {
@@ -264,15 +381,30 @@ els.input.addEventListener('change', () => {
     els.input.value = '';
 });
 
-for (const type of ['dragenter', 'dragover']) {
-    els.drop.addEventListener(type, (e) => { e.preventDefault(); els.drop.classList.add('over'); });
-}
-for (const type of ['dragleave', 'drop']) {
-    els.drop.addEventListener(type, () => els.drop.classList.remove('over'));
-}
-els.drop.addEventListener('drop', (e) => {
+// Área de upload acessível pelo teclado.
+els.drop.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        els.input.click();
+    }
+});
+
+// Soltar arquivos em qualquer lugar da página (e nunca deixar o navegador abri-los,
+// o que faria perder o trabalho em andamento).
+let dragDepth = 0;
+window.addEventListener('dragenter', (e) => {
     e.preventDefault();
-    addFiles(e.dataTransfer.files);
+    if (++dragDepth === 1) els.drop.classList.add('over');
+});
+window.addEventListener('dragleave', () => {
+    if (--dragDepth <= 0) { dragDepth = 0; els.drop.classList.remove('over'); }
+});
+window.addEventListener('dragover', (e) => e.preventDefault());
+window.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dragDepth = 0;
+    els.drop.classList.remove('over');
+    if (e.dataTransfer?.files.length) addFiles(e.dataTransfer.files);
 });
 
 els.quality.addEventListener('input', () => { els.qualityOut.textContent = els.quality.value; });
@@ -284,4 +416,11 @@ els.dryRun.addEventListener('change', () => {
 els.rerun.addEventListener('click', rerunAll);
 els.clear.addEventListener('click', clearAll);
 $('closePreview').addEventListener('click', () => els.dialog.close());
-els.dialog.addEventListener('close', () => { els.before.replaceChildren(); els.after.replaceChildren(); });
+els.dialog.addEventListener('close', () => {
+    previewing = null;
+    els.before.replaceChildren();
+    els.after.replaceChildren();
+});
+
+startWorker();
+updateButtons();

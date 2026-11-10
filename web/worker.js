@@ -1,13 +1,33 @@
 // Web Worker: roda a compressão (Rust/WASM) fora da thread principal,
 // para que arquivos grandes não travem a interface.
+//
+// A chamada ao WASM é síncrona e não pode ser interrompida. Para cancelar,
+// a página encerra este worker (worker.terminate()) e cria outro.
 import init, { compress_image, compress_pdf } from '../pkg/projeto_02.js';
 
 const ready = init();
+
+function friendlyError(err) {
+    if (err instanceof WebAssembly.RuntimeError) {
+        // Pânico ou falta de memória dentro do Rust.
+        return 'Erro interno ao processar este arquivo (pode estar corrompido ou ser grande demais para a memória do navegador).';
+    }
+    return String(err?.message ?? err);
+}
 
 self.onmessage = async ({ data: job }) => {
     const { id, kind, buffer, quality, scale, format, pdf } = job;
     try {
         await ready;
+    } catch (err) {
+        self.postMessage({
+            id, ok: false, fatal: true,
+            error: 'Não foi possível carregar o módulo WebAssembly. Gere-o com "wasm-pack build --target web --release".',
+        });
+        return;
+    }
+
+    try {
         const input = new Uint8Array(buffer);
         const start = performance.now();
         const r = kind === 'pdf'
@@ -36,6 +56,8 @@ self.onmessage = async ({ data: job }) => {
         r.free();
         self.postMessage({ id, ok: true, result }, [out.buffer]);
     } catch (err) {
-        self.postMessage({ id, ok: false, error: String(err?.message ?? err) });
+        // Depois de um erro a instância do WASM pode ficar inconsistente;
+        // `fatal` pede à página que recrie o worker.
+        self.postMessage({ id, ok: false, fatal: err instanceof WebAssembly.RuntimeError, error: friendlyError(err) });
     }
 };
