@@ -60,11 +60,11 @@ fn entrada_invalida_retorna_erro() {
     assert!(compress_image_impl(b"nao sou uma imagem", 70, 1.0, "auto").is_err());
     assert!(compress_image_impl(&[0x89, b'P', b'N', b'G', 0, 0], 70, 1.0, "auto").is_err());
     assert!(compress_image_impl(&encode(&sample_rgb(8, 8).into(), ImageFormat::Png), 70, 1.0, "gif").is_err());
-    assert!(compress_pdf_impl(b"%PDF-1.4 lixo", 70, 1.0).is_err());
+    assert!(compress_pdf_impl(b"%PDF-1.4 lixo", Default::default()).is_err());
 }
 
 fn check_pdf(bytes: &[u8]) {
-    let r = compress_pdf_impl(bytes, 50, 0.5).unwrap();
+    let r = compress_pdf_impl(bytes, projeto_02::PdfOptions { quality: 50, scale: 0.5, ..Default::default() }).unwrap();
     assert_eq!(r.mime(), "application/pdf");
     assert!(r.images_found() > 0, "o PDF de teste deveria conter imagens");
     assert!(r.compressed_size() <= bytes.len());
@@ -78,6 +78,90 @@ fn check_pdf(bytes: &[u8]) {
         r.images_optimized(),
         r.images_found()
     );
+}
+
+/// PDF "marcado" como os gerados pelo Office: árvore de estrutura com muitos
+/// elementos, marcações BDC/EMC e um bloco de conteúdo opcional (/OC).
+fn tagged_pdf() -> Vec<u8> {
+    use lopdf::{Object, Stream, dictionary};
+    let mut doc = Document::with_version("1.5");
+    let pages_id = doc.new_object_id();
+    let font_id = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+    let mut content = Vec::new();
+    for i in 0..300 {
+        content.extend_from_slice(
+            format!("/P <</MCID {i}>> BDC BT /F1 10 Tf 20 {} Td (Linha {i}) Tj ET EMC\n", 20 + i * 2).as_bytes(),
+        );
+    }
+    content.extend_from_slice(b"/OC /Camada1 BDC 0 0 10 10 re f EMC\n");
+    let content_id = doc.add_object(Stream::new(dictionary! {}, content));
+    let page_id = doc.add_object(dictionary! {
+        "Type" => "Page",
+        "Parent" => pages_id,
+        "Contents" => content_id,
+        "StructParents" => 0,
+        "Resources" => dictionary! { "Font" => dictionary! { "F1" => font_id } },
+        "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+    });
+    doc.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => vec![page_id.into()], "Count" => 1 }),
+    );
+    let root_elem = doc.new_object_id();
+    let kids: Vec<Object> = (0..300)
+        .map(|i| doc.add_object(dictionary! { "Type" => "StructElem", "S" => "P", "P" => root_elem, "Pg" => page_id, "K" => i }).into())
+        .collect();
+    doc.objects.insert(root_elem, Object::Dictionary(dictionary! { "Type" => "StructElem", "S" => "Document", "K" => kids }));
+    let tree = doc.add_object(dictionary! { "Type" => "StructTreeRoot", "K" => root_elem });
+    let xmp = doc.add_object(Stream::new(dictionary! { "Type" => "Metadata", "Subtype" => "XML" }, vec![b' '; 4000]));
+    let catalog = doc.add_object(dictionary! {
+        "Type" => "Catalog",
+        "Pages" => pages_id,
+        "StructTreeRoot" => tree,
+        "MarkInfo" => dictionary! { "Marked" => true },
+        "Metadata" => xmp,
+    });
+    doc.trailer.set("Root", catalog);
+    let mut out = Vec::new();
+    doc.save_to(&mut out).unwrap();
+    out
+}
+
+#[test]
+fn pdf_remove_estrutura_e_metadados() {
+    let original = tagged_pdf();
+    let r = compress_pdf_impl(&original, Default::default()).unwrap();
+    assert!(!r.kept_original());
+    assert!(r.compressed_size() * 3 < original.len(), "{} -> {}", original.len(), r.compressed_size());
+    assert!(r.objects_after() < 10);
+
+    let doc = Document::load_mem(&r.data()).unwrap();
+    let catalog = doc.catalog().unwrap();
+    assert!(!catalog.has(b"StructTreeRoot") && !catalog.has(b"MarkInfo") && !catalog.has(b"Metadata"));
+    let page = *doc.get_pages().get(&1).unwrap();
+    assert!(!doc.get_dictionary(page).unwrap().has(b"StructParents"));
+    let content = String::from_utf8(doc.get_page_content(page).unwrap()).unwrap();
+    assert!(!content.contains("MCID"), "marcações de estrutura deveriam sair");
+    assert!(content.contains("(Linha 299)Tj"));
+    assert!(content.contains("/OC/Camada1 BDC"), "conteúdo opcional deve ser mantido: {}", &content[content.len() - 80..]);
+    assert_eq!(content.matches("EMC").count(), 1);
+}
+
+#[test]
+fn pdf_opcoes_desligadas_mantem_estrutura() {
+    let original = tagged_pdf();
+    let opts = projeto_02::PdfOptions {
+        strip_structure: false,
+        strip_metadata: false,
+        subset_fonts: false,
+        ..Default::default()
+    };
+    let r = compress_pdf_impl(&original, opts).unwrap();
+    let doc = Document::load_mem(&r.data()).unwrap();
+    assert!(doc.catalog().unwrap().has(b"StructTreeRoot"));
+    assert!(doc.catalog().unwrap().has(b"Metadata"));
+    // Mesmo sem remover nada, a gravação com object streams já reduz o arquivo.
+    assert!(r.compressed_size() < original.len());
 }
 
 #[test]

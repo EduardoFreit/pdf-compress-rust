@@ -1,9 +1,10 @@
 //! Otimizador de arquivos (imagens e PDFs) exposto ao JavaScript via WebAssembly.
 
 pub mod image_opt;
-pub mod pdf_opt;
+pub mod pdf;
 
 use image_opt::OutputFormat;
+pub use pdf::PdfOptions;
 use wasm_bindgen::prelude::*;
 
 /// Resultado de uma compressão, devolvido ao JavaScript.
@@ -18,6 +19,9 @@ pub struct CompressionResult {
     original_height: u32,
     images_found: u32,
     images_optimized: u32,
+    fonts_subset: u32,
+    objects_before: u32,
+    objects_after: u32,
     kept_original: bool,
 }
 
@@ -64,6 +68,18 @@ impl CompressionResult {
     pub fn images_optimized(&self) -> u32 {
         self.images_optimized
     }
+    #[wasm_bindgen(getter, js_name = fontsSubset)]
+    pub fn fonts_subset(&self) -> u32 {
+        self.fonts_subset
+    }
+    #[wasm_bindgen(getter, js_name = objectsBefore)]
+    pub fn objects_before(&self) -> u32 {
+        self.objects_before
+    }
+    #[wasm_bindgen(getter, js_name = objectsAfter)]
+    pub fn objects_after(&self) -> u32 {
+        self.objects_after
+    }
     #[wasm_bindgen(getter, js_name = keptOriginal)]
     pub fn kept_original(&self) -> bool {
         self.kept_original
@@ -79,10 +95,20 @@ pub fn compress_image(data: &[u8], quality: u8, scale: f32, format: &str) -> Res
     compress_image_impl(data, quality, scale, format).map_err(|e| JsError::new(&e))
 }
 
-/// Otimiza um PDF recomprimindo as imagens embutidas e compactando os objetos.
+/// Otimiza um PDF: recomprime imagens, remove tags e metadados, reduz fontes
+/// ao subconjunto usado e regrava o arquivo de forma compacta.
 #[wasm_bindgen]
-pub fn compress_pdf(data: &[u8], quality: u8, scale: f32) -> Result<CompressionResult, JsError> {
-    compress_pdf_impl(data, quality, scale).map_err(|e| JsError::new(&e))
+pub fn compress_pdf(
+    data: &[u8],
+    quality: u8,
+    scale: f32,
+    strip_structure: bool,
+    strip_metadata: bool,
+    subset_fonts: bool,
+    max_compression: bool,
+) -> Result<CompressionResult, JsError> {
+    let opts = PdfOptions { quality, scale, strip_structure, strip_metadata, subset_fonts, max_compression };
+    compress_pdf_impl(data, opts).map_err(|e| JsError::new(&e))
 }
 
 pub fn compress_image_impl(data: &[u8], quality: u8, scale: f32, format: &str) -> Result<CompressionResult, String> {
@@ -97,13 +123,16 @@ pub fn compress_image_impl(data: &[u8], quality: u8, scale: f32, format: &str) -
         original_height: out.original_height,
         images_found: 1,
         images_optimized: u32::from(!out.kept_original),
+        fonts_subset: 0,
+        objects_before: 0,
+        objects_after: 0,
         kept_original: out.kept_original,
         data: out.data,
     })
 }
 
-pub fn compress_pdf_impl(data: &[u8], quality: u8, scale: f32) -> Result<CompressionResult, String> {
-    let out = pdf_opt::compress_pdf(data, quality, scale)?;
+pub fn compress_pdf_impl(data: &[u8], opts: PdfOptions) -> Result<CompressionResult, String> {
+    let out = pdf::compress_pdf(data, opts)?;
     Ok(CompressionResult {
         mime: "application/pdf".into(),
         original_size: data.len(),
@@ -113,6 +142,9 @@ pub fn compress_pdf_impl(data: &[u8], quality: u8, scale: f32) -> Result<Compres
         original_height: 0,
         images_found: out.images_found,
         images_optimized: out.images_optimized,
+        fonts_subset: out.fonts_subset,
+        objects_before: out.objects_before,
+        objects_after: out.objects_after,
         kept_original: out.kept_original,
         data: out.data,
     })

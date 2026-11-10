@@ -5,13 +5,13 @@ import init, { compress_image, compress_pdf } from '../pkg/projeto_02.js';
 const ready = init();
 
 self.onmessage = async ({ data: job }) => {
-    const { id, kind, buffer, quality, scale, format } = job;
+    const { id, kind, buffer, quality, scale, format, pdf } = job;
     try {
         await ready;
         const input = new Uint8Array(buffer);
         const start = performance.now();
         const r = kind === 'pdf'
-            ? compress_pdf(input, quality, scale)
+            ? compress_pdf(input, quality, scale, pdf.stripStructure, pdf.stripMetadata, pdf.subsetFonts, pdf.maxCompression)
             : compress_image(input, quality, scale, format);
         const ms = performance.now() - start;
 
@@ -26,6 +26,9 @@ self.onmessage = async ({ data: job }) => {
             originalHeight: r.originalHeight,
             imagesFound: r.imagesFound,
             imagesOptimized: r.imagesOptimized,
+            fontsSubset: r.fontsSubset,
+            objectsBefore: r.objectsBefore,
+            objectsAfter: r.objectsAfter,
             keptOriginal: r.keptOriginal,
             ms,
             data: out.buffer,

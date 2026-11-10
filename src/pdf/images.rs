@@ -1,19 +1,10 @@
-//! Otimização de PDFs: extrai as imagens embutidas, recomprime-as como JPEG
-//! (com os mesmos métodos usados para imagens comuns) e recria o documento
-//! com os objetos compactados.
+//! Imagens embutidas em PDFs: extrai, recomprime como JPEG (com os mesmos
+//! métodos usados para imagens comuns) e devolve ao documento.
 
 use crate::image_opt::{encode_jpeg, resize};
 use image::{DynamicImage, ExtendedColorType, GenericImageView, GrayImage, ImageFormat, RgbImage};
 use lopdf::{Dictionary, Document, Object, ObjectId, Stream};
 use std::collections::HashSet;
-
-pub struct PdfOutput {
-    pub data: Vec<u8>,
-    pub images_found: u32,
-    pub images_optimized: u32,
-    /// `true` quando o PDF gerado não ficou menor e o original foi mantido.
-    pub kept_original: bool,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Color {
@@ -58,14 +49,10 @@ struct Replacement {
     color: Color,
 }
 
-pub fn compress_pdf(data: &[u8], quality: u8, scale: f32) -> Result<PdfOutput, String> {
-    let mut doc = Document::load_mem(data).map_err(|e| format!("Não foi possível ler o PDF: {e}"))?;
-    if doc.is_encrypted() {
-        return Err("PDFs criptografados não são suportados".into());
-    }
-
+/// Recomprime as imagens do documento. Retorna (encontradas, otimizadas).
+pub fn optimize_images(doc: &mut Document, quality: u8, scale: f32) -> (u32, u32) {
     // Máscaras (SMask / Mask) são mantidas sem perdas.
-    let masks = collect_mask_ids(&doc);
+    let masks = collect_mask_ids(doc);
 
     let mut images_found = 0u32;
     let mut jobs = Vec::new();
@@ -78,32 +65,19 @@ pub fn compress_pdf(data: &[u8], quality: u8, scale: f32) -> Result<PdfOutput, S
         if masks.contains(&id) {
             continue;
         }
-        if let Some(job) = prepare_job(&doc, id, stream) {
+        if let Some(job) = prepare_job(doc, id, stream) {
             jobs.push(job);
         }
     }
 
     let replacements = run_jobs(jobs, quality, scale);
     let images_optimized = replacements.len() as u32;
-
     for r in replacements {
         if let Ok(Object::Stream(stream)) = doc.get_object_mut(r.id) {
             apply_replacement(stream, r);
         }
     }
-
-    doc.prune_objects();
-    doc.delete_zero_length_streams();
-    doc.renumber_objects();
-    doc.compress();
-
-    let mut out = Vec::new();
-    doc.save_to(&mut out).map_err(|e| format!("Falha ao gravar o PDF: {e}"))?;
-
-    if out.len() >= data.len() {
-        return Ok(PdfOutput { data: data.to_vec(), images_found, images_optimized: 0, kept_original: true });
-    }
-    Ok(PdfOutput { data: out, images_found, images_optimized, kept_original: false })
+    (images_found, images_optimized)
 }
 
 #[cfg(not(target_arch = "wasm32"))]

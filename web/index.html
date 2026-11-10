@@ -43,6 +43,14 @@
                 <small>Só compara original e otimizado, sem salvar nada.</small>
             </div>
         </div>
+
+        <fieldset class="pdf-options">
+            <legend>Opções de PDF</legend>
+            <label><input type="checkbox" id="subsetFonts" checked> Reduzir fontes aos caracteres usados</label>
+            <label><input type="checkbox" id="stripStructure" checked> Remover tags de acessibilidade <small>(leitores de tela perdem a estrutura)</small></label>
+            <label><input type="checkbox" id="stripMetadata" checked> Remover metadados e miniaturas</label>
+            <label><input type="checkbox" id="maxCompression"> Compressão máxima <small>(~10% menor, bem mais lenta)</small></label>
+        </fieldset>
         <div class="actions">
             <button id="rerun" disabled>Reprocessar com estas configurações</button>
             <button id="clear" class="ghost" disabled>Limpar</button>

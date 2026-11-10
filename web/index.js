@@ -8,6 +8,8 @@ const els = {
     quality: $('quality'), qualityOut: $('qualityOut'),
     scale: $('scale'), scaleOut: $('scaleOut'),
     format: $('format'), dryRun: $('dryRun'),
+    subsetFonts: $('subsetFonts'), stripStructure: $('stripStructure'),
+    stripMetadata: $('stripMetadata'), maxCompression: $('maxCompression'),
     rerun: $('rerun'), clear: $('clear'),
     summary: $('summary'), results: $('results'),
     dialog: $('preview'), previewTitle: $('previewTitle'),
@@ -50,6 +52,12 @@ function settings() {
         quality: Number(els.quality.value),
         scale: Number(els.scale.value) / 100,
         format: els.format.value,
+        pdf: {
+            subsetFonts: els.subsetFonts.checked,
+            stripStructure: els.stripStructure.checked,
+            stripMetadata: els.stripMetadata.checked,
+            maxCompression: els.maxCompression.checked,
+        },
     };
 }
 
@@ -172,6 +180,10 @@ function render(entry) {
             details.push(result.mime.replace('image/', '').toUpperCase());
         } else {
             details.push(`${result.imagesOptimized} de ${result.imagesFound} imagens recomprimidas`);
+            if (result.fontsSubset) details.push(`${result.fontsSubset} ${result.fontsSubset === 1 ? 'fonte reduzida' : 'fontes reduzidas'}`);
+            if (result.objectsAfter < result.objectsBefore) {
+                details.push(`${result.objectsBefore.toLocaleString('pt-BR')} → ${result.objectsAfter.toLocaleString('pt-BR')} objetos`);
+            }
         }
         details.push(`${result.ms.toFixed(0)} ms`);
         if (result.keptOriginal) details.push('já estava otimizado; original mantido');

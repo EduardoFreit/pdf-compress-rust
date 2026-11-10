@@ -6,7 +6,10 @@ edition = "2024"
 [dependencies]
 image = "0.25.5"
 lopdf = "=0.35.0"
+miniz_oxide = "0.8"
+ttf-parser = "0.25"
 wasm-bindgen = "0.2.100"
+zopfli = { version = "0.8", default-features = false, features = ["std", "zlib"] }
 
 # Em alvos nativos (testes, CLI) as imagens do PDF são processadas em paralelo.
 # No navegador (wasm32-unknown-unknown) não há threads, então o processamento é
