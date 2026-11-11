@@ -164,12 +164,81 @@ fn pdf_opcoes_desligadas_mantem_estrutura() {
     assert!(r.compressed_size() < original.len());
 }
 
-#[test]
-fn pdf_input() {
-    check_pdf(include_bytes!("input.pdf"));
+/// PDF com imagens nos formatos mais comuns: JPEG embutido (DCTDecode),
+/// RGB cru comprimido com Flate e imagem com paleta (Indexed).
+fn pdf_with_images() -> Vec<u8> {
+    use lopdf::{Object, Stream, StringFormat, dictionary};
+    let mut doc = Document::with_version("1.5");
+    let pages_id = doc.new_object_id();
+
+    let photo = sample_rgb(1200, 900);
+    let jpeg = encode(&photo.clone().into(), ImageFormat::Jpeg);
+    let jpeg_id = doc.add_object(Stream::new(
+        dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => 1200, "Height" => 900,
+            "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8, "Filter" => "DCTDecode" },
+        jpeg,
+    ));
+
+    let raw = sample_rgb(800, 600).into_raw();
+    let mut raw_stream = Stream::new(
+        dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => 800, "Height" => 600,
+            "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8 },
+        raw,
+    );
+    raw_stream.compress().unwrap();
+    let raw_id = doc.add_object(raw_stream);
+
+    let palette: Vec<u8> = (0..=255u8).flat_map(|i| [i, 255 - i, i / 2]).collect();
+    let indices: Vec<u8> = (0..400u32 * 300).map(|i| ((i % 400) ^ (i / 400)) as u8).collect();
+    let indexed_id = doc.add_object(Stream::new(
+        dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => 400, "Height" => 300,
+            "ColorSpace" => vec!["Indexed".into(), "DeviceRGB".into(), 255.into(), Object::String(palette, StringFormat::Hexadecimal)],
+            "BitsPerComponent" => 8 },
+        indices,
+    ));
+
+    let content = b"q 300 0 0 225 20 500 cm /Im1 Do Q q 200 0 0 150 20 300 cm /Im2 Do Q q 200 0 0 150 300 300 cm /Im3 Do Q".to_vec();
+    let content_id = doc.add_object(Stream::new(dictionary! {}, content));
+    let page_id = doc.add_object(dictionary! {
+        "Type" => "Page",
+        "Parent" => pages_id,
+        "Contents" => content_id,
+        "Resources" => dictionary! { "XObject" => dictionary! { "Im1" => jpeg_id, "Im2" => raw_id, "Im3" => indexed_id } },
+        "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+    });
+    doc.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => vec![page_id.into()], "Count" => 1 }),
+    );
+    let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+    doc.trailer.set("Root", catalog);
+    let mut out = Vec::new();
+    doc.save_to(&mut out).unwrap();
+    out
 }
 
 #[test]
-fn pdf_input2() {
-    check_pdf(include_bytes!("input2.pdf"));
+fn pdf_com_imagens() {
+    let pdf = pdf_with_images();
+    check_pdf(&pdf);
+    let r = compress_pdf_impl(&pdf, projeto_02::PdfOptions { quality: 50, scale: 0.5, ..Default::default() }).unwrap();
+    assert_eq!(r.images_found(), 3);
+    assert_eq!(r.images_optimized(), 3, "JPEG, RGB cru e indexada devem ser recomprimidas");
+    assert!(r.compressed_size() * 2 < pdf.len());
+
+    // As imagens substituídas precisam continuar decodificáveis e com as novas dimensões.
+    let doc = Document::load_mem(&r.data()).unwrap();
+    let mut sizes: Vec<(i64, i64)> = doc
+        .objects
+        .values()
+        .filter_map(|o| o.as_stream().ok())
+        .filter(|s| s.dict.get(b"Subtype").and_then(lopdf::Object::as_name).ok() == Some(b"Image"))
+        .map(|s| {
+            assert_eq!(s.dict.get(b"Filter").unwrap().as_name().unwrap(), b"DCTDecode");
+            image::load_from_memory_with_format(&s.content, ImageFormat::Jpeg).expect("JPEG válido");
+            (s.dict.get(b"Width").unwrap().as_i64().unwrap(), s.dict.get(b"Height").unwrap().as_i64().unwrap())
+        })
+        .collect();
+    sizes.sort();
+    assert_eq!(sizes, vec![(200, 150), (400, 300), (600, 450)]);
 }

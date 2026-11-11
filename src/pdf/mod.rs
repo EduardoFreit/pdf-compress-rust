@@ -58,6 +58,7 @@ pub fn compress_pdf(data: &[u8], opts: PdfOptions) -> Result<PdfOutput, String> 
         return Err("PDFs criptografados não são suportados".into());
     }
     let objects_before = count_objects(&doc);
+    let pages_before = doc.get_pages().len();
 
     let (images_found, images_optimized) = images::optimize_images(&mut doc, opts.quality, opts.scale);
     if opts.strip_structure {
@@ -77,9 +78,10 @@ pub fn compress_pdf(data: &[u8], opts: PdfOptions) -> Result<PdfOutput, String> 
     let out = writer::save(&doc, opts.max_compression);
     let objects_after = count_objects(&doc);
 
-    // Garante que o resultado pode ser lido de volta antes de entregá-lo.
-    if Document::load_mem(&out).is_err() {
-        return Err("O PDF otimizado ficou inválido; o arquivo original foi preservado.".into());
+    // Garante que o resultado pode ser lido de volta, com as mesmas páginas, antes de entregá-lo.
+    match Document::load_mem(&out) {
+        Ok(check) if check.get_pages().len() == pages_before => {}
+        _ => return Err("O PDF otimizado ficou inválido; o arquivo original foi preservado.".into()),
     }
 
     let kept_original = out.len() >= data.len();
