@@ -123,9 +123,7 @@ fn collect(doc: &Document) -> Option<(HashMap<ObjectId, Usage>, HashSet<ObjectId
         let is_font = d.get(b"Type").and_then(Object::as_name).ok() == Some(b"Font");
         let subtype = d.get(b"Subtype").and_then(Object::as_name).ok();
         if is_font && matches!(subtype, Some(b"TrueType" | b"Type0")) && !w.seen_fonts.contains(id) {
-            if let Some(file) = font_file(doc, d) {
-                w.unsafe_files.insert(file);
-            }
+            w.unsafe_files.extend(font_file(doc, d));
         }
     }
 
@@ -187,14 +185,14 @@ impl Walker<'_> {
 
         // Padrões de ladrilho (PatternType 1) têm conteúdo próprio.
         if let Some(patterns) = resources.and_then(|r| r.get(b"Pattern").ok()).and_then(|p| resolve_dict(doc, p)) {
-            for (_, p) in patterns.iter() {
-                if let Ok(id) = p.as_reference() {
-                    if let Ok(Object::Stream(s)) = doc.get_object(id) {
-                        if s.dict.get(b"PatternType").and_then(Object::as_i64).ok() == Some(1) {
-                            self.walk_form(id, resources, None)?;
-                        }
-                    }
-                }
+            let is_tiling = |id: ObjectId| {
+                matches!(doc.get_object(id), Ok(Object::Stream(s))
+                    if s.dict.get(b"PatternType").and_then(Object::as_i64).ok() == Some(1))
+            };
+            let tiling: Vec<ObjectId> =
+                patterns.iter().filter_map(|(_, p)| p.as_reference().ok()).filter(|&id| is_tiling(id)).collect();
+            for id in tiling {
+                self.walk_form(id, resources, None)?;
             }
         }
 
@@ -255,8 +253,9 @@ impl Walker<'_> {
         match &font.kind {
             Kind::Simple => usage.codes.extend(s.iter().copied()),
             Kind::Cid(map) => {
-                for pair in s.chunks_exact(2) {
-                    let cid = u16::from_be_bytes([pair[0], pair[1]]);
+                // Códigos de 2 bytes (big-endian); um byte final sem par é ignorado.
+                for i in (0..s.len() / 2).map(|i| i * 2) {
+                    let cid = u16::from_be_bytes([s[i], s[i + 1]]);
                     let gid = match map {
                         None => cid,
                         Some(m) => {

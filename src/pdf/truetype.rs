@@ -140,7 +140,7 @@ pub fn subset(data: &[u8], used: &BTreeSet<u16>) -> Option<Vec<u8>> {
         };
         out_tables.push((*tag, content));
     }
-    out_tables.sort_by(|a, b| a.0.cmp(&b.0));
+    out_tables.sort_by_key(|t| t.0);
 
     let font = assemble(&out_tables);
     (font.len() < data.len()).then_some(font)

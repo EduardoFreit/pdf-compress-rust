@@ -31,7 +31,7 @@ fn main() {
         e.1 += size;
     }
     let mut v: Vec<_> = by_kind.into_iter().collect();
-    v.sort_by(|a, b| b.1 .1.cmp(&a.1 .1));
+    v.sort_by_key(|e| std::cmp::Reverse(e.1 .1));
     for (k, (n, s)) in v.iter().take(25) { println!("{s:>10} bytes  {n:>5}x  {k}"); }
     images.sort();
     images.reverse();
