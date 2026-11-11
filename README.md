@@ -4,7 +4,7 @@ Aplicação web que **reduz o tamanho de imagens e PDFs direto no navegador**. T
 lógica de compressão é escrita em Rust e compilada para WebAssembly: os arquivos
 **nunca saem do computador do usuário**, não há servidor processando nada.
 
-**Demonstração:** https://USUARIO.github.io/REPOSITORIO/
+**Demonstração:** https://eduardofreit.github.io/pdf-compress-rust/
 
 | Exemplo | Original | Otimizado | Redução |
 |---|---:|---:|---:|
@@ -52,7 +52,7 @@ No caso do PDF, o resultado é **idêntico pixel a pixel** ao original: nada vis
 
 ## Como usar
 
-1. Abra a [demonstração](https://USUARIO.github.io/REPOSITORIO/) (ou [rode localmente](#rodando-localmente)).
+1. Abra a [demonstração](https://eduardofreit.github.io/pdf-compress-rust/) (ou [rode localmente](#rodando-localmente)).
 2. Ajuste as opções, se quiser:
 
    | Opção | Efeito |
@@ -156,8 +156,8 @@ class CompressionResult {
 ### Passos
 
 ```bash
-git clone https://github.com/USUARIO/REPOSITORIO.git
-cd REPOSITORIO
+git clone https://github.com/EduardoFreit/pdf-compress-rust.git
+cd pdf-compress-rust
 
 # 1. Compila o Rust para WebAssembly (gera a pasta pkg/)
 wasm-pack build --target web --release

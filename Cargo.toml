@@ -2,6 +2,8 @@
 name = "projeto-02"
 version = "0.1.0"
 edition = "2024"
+description = "Otimizador de imagens e PDFs em Rust, compilado para WebAssembly"
+repository = "https://github.com/EduardoFreit/pdf-compress-rust"
 
 [dependencies]
 image = "0.25.5"
